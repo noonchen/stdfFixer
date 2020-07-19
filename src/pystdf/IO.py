@@ -26,6 +26,8 @@ from pystdf.Types import *
 from pystdf import V4
 
 from pystdf.Pipeline import DataSource
+from  threading import Thread
+import time
 
 def appendFieldParser(fn, action):
   """Append a field parsing function to a record parsing function.
@@ -50,7 +52,12 @@ class Parser(DataSource):
       self.eof = 1
       raise EofException()
     header.len -= len(buf)
-    val,=struct.unpack(self.endian + fmt, buf)
+    try:
+      val,=struct.unpack(self.endian + fmt, buf) ########
+    except Exception as e:
+      print(repr(e))
+      self.eof = 1
+      raise EofException()
     if isinstance(val,bytes):
         return val.decode("ascii")
     else:
@@ -62,7 +69,11 @@ class Parser(DataSource):
     if len(buf) == 0:
       self.eof = 1
       raise EofException()
-    val,=struct.unpack(self.endian + fmt, buf)
+    try:
+      val,=struct.unpack(self.endian + fmt, buf) ########
+    except Exception as e:
+      self.eof = 1
+      raise EofException()
     return val
 
   def readField(self, header, stdfFmt):
@@ -81,12 +92,16 @@ class Parser(DataSource):
       raise EndOfRecordException()
     if slen == 0:
       return ""
-    buf = self.inp.read(slen);
+    buf = self.inp.read(slen)
     if len(buf) == 0:
       self.eof = 1
       raise EofException()
     header.len -= len(buf)
-    val,=struct.unpack(str(slen) + "s", buf)
+    try:
+      val,=struct.unpack(str(slen) + "s", buf)
+    except Exception as e:
+      self.eof = 1
+      raise EofException()
     return val.decode("ascii")
 
   def readBn(self, header):
@@ -149,6 +164,20 @@ class Parser(DataSource):
   def header(self, header): pass
 
   def parse_records(self, count=0):
+    if self.QSignal != None:
+      def sendMessage():
+        FormatSize = lambda num: "%d Bytes"%num if num < 1e3 else ("%.2f KB"%(num/1e3) if num < 1e6 else ("%.2f MB"%(num/1e6) if num < 1e9 else "%.2f GB"%(num/1e9)))
+        self.QSignal.pgbar_setter.emit(0) # Init progressBar value
+        while True:
+          text = "Analyzing <b>%s</b>, total <b>%s</b>"%(FormatSize(self.inp.tell()), FormatSize(self.inpSize))
+          self.QSignal.message_printer.emit(text)
+          self.QSignal.pgbar_setter.emit( int(100 * self.inp.tell()/self.inpSize) )
+          if self.parse_complete: break
+          time.sleep(0.5)
+      t2 = Thread(target=sendMessage)
+      t2.daemon = True
+      t2.start()
+      
     i = 0
     self.eof = 0
     fields = None
@@ -162,7 +191,7 @@ class Parser(DataSource):
           fields = recParser(self, header, [])
           if len(fields) < len(recType.columnNames):
             fields += [None] * (len(recType.columnNames) - len(fields))
-          self.send((recType, fields))
+          self.send((recType, fields, self.inp.tell()))
         else:
           self.inp.read(header.len)
         if count:
@@ -185,6 +214,8 @@ class Parser(DataSource):
     except Exception as exception:
       self.cancel(exception)
       raise
+    finally:
+      self.parse_complete = True
 
   def getFieldParser(self, fieldType):
     if (fieldType.startswith("k")):
@@ -200,14 +231,18 @@ class Parser(DataSource):
       fn = appendFieldParser(fn, self.getFieldParser(stdfType))
     return fn
 
-  def __init__(self, recTypes=V4.records, inp=sys.stdin, reopen_fn=None, endian=None):
-    DataSource.__init__(self, ['header']);
+  def __init__(self, recTypes=V4.records, inp=sys.stdin, reopen_fn=None, endian=None, QSignal=None):
+    DataSource.__init__(self, ['header'])
     self.eof = 1
     self.recTypes = set(recTypes)
     self.inp = inp
     self.reopen_fn = reopen_fn
     self.endian = endian
-
+    self.inp.seek(0, 2)
+    self.inpSize = self.inp.tell()
+    self.inp.seek(0)
+    self.QSignal = QSignal
+    self.parse_complete = False
     self.recordMap = dict(
       [ ( (recType.typ, recType.sub), recType )
         for recType in recTypes ])

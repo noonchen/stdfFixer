@@ -38,8 +38,6 @@ class WRR_data:
     FUNC_CNT: int = 4294967295
     RTST_CNT: int = 4294967295
     WAFER_ID: str = ""
-    WAFER_ID: str = ""
-    FRAME_ID: str = ""
     FRAME_ID: str = ""
     MASK_ID: str = ""
     USR_DESC: str = ""
